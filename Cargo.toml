@@ -1,0 +1,28 @@
+[package]
+name = "maxminddb"
+version = "0.1.0"
+edition = "2021"
+keywords = ["MaxMind", "GeoIP", "GeoIP2", "GeoLite", "ip"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+
+[features]
+default = ["mmap", "unsafe-str"]
+mmap = ["memmap2"]
+unsafe-str = []
+
+[dependencies]
+memmap2 = { version = "0.9", default-features = false, optional = true }
+
+[dev-dependencies]
+criterion = "0.5"
+fake = "2.9"
+geoip2 = { version = "0.1", features = ["unsafe-str"] }
+
+[[bench]]
+name = "lookup"
+harness = false
