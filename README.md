@@ -4,7 +4,7 @@ This library reads the MaxMind DB format, including the GeoIP2 and GeoLite2 data
 
 ## Features
 - lightweight
-- dependent-less
+- less dependencies
 
 ## Mmap
 Mmap will use less memory than in-memory implementation.

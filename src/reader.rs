@@ -98,8 +98,14 @@ impl<'a, S: AsRef<[u8]>> Reader<S> {
     /// Lookup the socket address in the opened MaxMind DB
     pub fn lookup<T: Decoder<'a>>(&'a self, addr: IpAddr) -> Result<T, Error> {
         let pointer = match addr {
-            IpAddr::V4(addr) => self.find_address_in_tree(addr.octets().as_ref())?,
-            IpAddr::V6(addr) => self.find_address_in_tree(addr.octets().as_ref())?,
+            IpAddr::V4(addr) => self.find_address_in_tree(&addr.octets())?,
+            IpAddr::V6(addr) => {
+                if self.ip_v4_start == 0 {
+                    return Err(Error::IPv4Only);
+                }
+
+                self.find_address_in_tree(&addr.octets())?
+            }
         };
         if pointer == 0 {
             return Err(Error::AddressNotFound);
@@ -147,16 +153,17 @@ impl<'a, S: AsRef<[u8]>> Reader<S> {
         }
     }
 
+    #[inline]
     fn read_left(&self, buf: &[u8], nodes: usize) -> usize {
         match self.record_size {
-            28 => {
-                (((buf[nodes + 3] as usize) & 0xF0) << 20)
-                    | ((buf[nodes] as usize) << 16)
+            24 => {
+                ((buf[nodes] as usize) << 16)
                     | ((buf[nodes + 1] as usize) << 8)
                     | (buf[nodes + 2] as usize)
             }
-            24 => {
-                ((buf[nodes] as usize) << 16)
+            28 => {
+                (((buf[nodes + 3] as usize) & 0xF0) << 20)
+                    | ((buf[nodes] as usize) << 16)
                     | ((buf[nodes + 1] as usize) << 8)
                     | (buf[nodes + 2] as usize)
             }
@@ -170,18 +177,19 @@ impl<'a, S: AsRef<[u8]>> Reader<S> {
         }
     }
 
+    #[inline]
     fn read_right(&self, buf: &[u8], nodes: usize) -> usize {
         match self.record_size {
+            24 => {
+                ((buf[nodes + 3] as usize) << 16)
+                    | ((buf[nodes + 4] as usize) << 8)
+                    | (buf[nodes + 5] as usize)
+            }
             28 => {
                 (((buf[nodes + 3] as usize) & 0x0F) << 24)
                     | ((buf[nodes + 4] as usize) << 16)
                     | ((buf[nodes + 5] as usize) << 8)
                     | (buf[nodes + 6] as usize)
-            }
-            24 => {
-                ((buf[nodes + 3] as usize) << 16)
-                    | ((buf[nodes + 4] as usize) << 8)
-                    | (buf[nodes + 5] as usize)
             }
             32 => {
                 ((buf[nodes + 4] as usize) << 24)
@@ -353,35 +361,34 @@ impl<'a> Decoder<'a> for City<'a> {
                 "subdivisions" => {
                     let (data_type, size) = read_control(buf, offset)?;
 
-                    let array = if data_type == DATA_TYPE_SLICE {
-                        let mut array = Vec::with_capacity(size);
-
-                        for _ in 0..size {
-                            let item = models::Subdivision::decode(buf, offset)?;
-                            array.push(item);
-                        }
-
-                        array
-                    } else if data_type == DATA_TYPE_POINTER {
-                        let offset = &mut read_pointer(buf, offset, size)?;
-                        let (data_type, size) = read_control(buf, offset)?;
-                        match data_type {
-                            DATA_TYPE_SLICE => {
-                                let mut array = Vec::with_capacity(size);
-                                for _ in 0..size {
-                                    let item = models::Subdivision::decode(buf, offset)?;
-                                    array.push(item);
-                                }
-
-                                array
+                    subdivisions = match data_type {
+                        DATA_TYPE_SLICE => {
+                            let mut array = Vec::with_capacity(size);
+                            for _ in 0..size {
+                                let item = models::Subdivision::decode(buf, offset)?;
+                                array.push(item);
                             }
-                            _ => return Err(Error::InvalidDataType(data_type)),
-                        }
-                    } else {
-                        return Err(Error::InvalidDataType(data_type));
-                    };
 
-                    subdivisions = Some(array);
+                            Some(array)
+                        }
+                        DATA_TYPE_POINTER => {
+                            let offset = &mut read_pointer(buf, offset, size)?;
+                            let (data_type, size) = read_control(buf, offset)?;
+                            match data_type {
+                                DATA_TYPE_SLICE => {
+                                    let mut array = Vec::with_capacity(size);
+                                    for _ in 0..size {
+                                        let item = models::Subdivision::decode(buf, offset)?;
+                                        array.push(item);
+                                    }
+
+                                    Some(array)
+                                }
+                                _ => return Err(Error::InvalidDataType(data_type)),
+                            }
+                        }
+                        _ => return Err(Error::InvalidDataType(data_type)),
+                    };
                 }
                 "traits" => traits = Some(models::Traits::decode(buf, offset)?),
                 field => return Err(Error::UnknownField(field.to_string())),

@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 keywords = ["MaxMind", "GeoIP", "GeoIP2", "GeoLite", "ip"]
 
+[profile.bench]
+debug = true
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
 [profile.release]
 opt-level = 3
 lto = "fat"
@@ -20,8 +26,8 @@ memmap2 = { version = "0.9", default-features = false, optional = true }
 
 [dev-dependencies]
 criterion = "0.5"
-fake = "2.9"
 geoip2 = { version = "0.1", features = ["unsafe-str"] }
+pprof = { version = "0.3", features = ["flamegraph"] }
 
 [[bench]]
 name = "lookup"

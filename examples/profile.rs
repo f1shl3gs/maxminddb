@@ -1,6 +1,5 @@
+use std::fs::File;
 use std::net::IpAddr;
-
-use criterion::{criterion_group, criterion_main, Criterion};
 
 const IP_LIST: [&str; 100] = [
     "16.55.182.141",
@@ -105,46 +104,27 @@ const IP_LIST: [&str; 100] = [
     "113.175.185.37",
 ];
 
-fn bench(c: &mut Criterion) {
+fn main() {
     let path = "GeoLite2-City.mmdb";
     let ips = IP_LIST
         .into_iter()
         .map(|s| s.parse().unwrap())
         .collect::<Vec<IpAddr>>();
-
-    let mut group = c.benchmark_group("bench");
-
     let reader = maxminddb::Reader::open_file(path).unwrap();
-    group.bench_function("in-memory", |b| {
-        b.iter(|| {
-            for ip in ips.iter() {
-                let _ = reader.lookup::<maxminddb::City>(*ip);
-            }
-        })
-    });
 
-/*
-    let reader = maxminddb::Reader::open_mmap(path).unwrap();
-    group.bench_function("mmap", |b| {
-        b.iter(|| {
-            for ip in ips.iter() {
-                let _ = reader.lookup::<maxminddb::City>(*ip);
-            }
-        })
-    });
+    let guard = pprof::ProfilerGuard::new(100).unwrap();
 
-    let data = std::fs::read(path).unwrap();
-    let reader = ::geoip2::Reader::<::geoip2::City>::from_bytes(&data).unwrap();
-    group.bench_function("geoip2", |b| {
-        b.iter(|| {
-            for ip in ips.iter() {
-                let _ = reader.lookup(*ip);
-            }
-        })
-    });
-*/
-    group.finish()
+    for _ in 0..100000 {
+        for ip in ips.iter() {
+            let _ = reader.lookup::<maxminddb::City>(*ip);
+        }
+    }
+
+    match guard.report().build() {
+        Ok(report) => {
+            let file = File::create("flamegraph.svg").unwrap();
+            report.flamegraph(file).unwrap();
+        }
+        Err(err) => panic!("{}", err)
+    };
 }
-
-criterion_group!(benches, bench);
-criterion_main!(benches);

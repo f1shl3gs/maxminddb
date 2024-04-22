@@ -10,6 +10,7 @@ pub enum Error {
     InvalidNode,
     MetadataNotFound,
     CorruptSearchTree,
+    IPv4Only,
     Open(std::io::Error),
     UnknownField(String),
 
@@ -35,6 +36,7 @@ impl Display for Error {
             Error::InvalidNode => fmt.write_str("invalid node")?,
             Error::MetadataNotFound => fmt.write_str("metadata is not found")?,
             Error::CorruptSearchTree => fmt.write_str("search tree is corrupt")?,
+            Error::IPv4Only => fmt.write_str("database is IPv4 only")?,
             Error::Open(err) => write!(fmt, "open file failed, {err}")?,
             Error::UnknownField(field) => write!(fmt, "unknown field {field}")?,
             #[cfg(not(feature = "unsafe-str"))]

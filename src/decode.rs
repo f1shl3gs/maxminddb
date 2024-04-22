@@ -62,22 +62,24 @@ pub(crate) fn read_control(buf: &[u8], offset: &mut usize) -> Result<(u8, usize)
 
 pub(crate) fn read_str<'a>(buf: &'a [u8], offset: &mut usize) -> Result<&'a str, Error> {
     let (data_type, size) = read_control(buf, offset)?;
-    match data_type {
-        DATA_TYPE_STRING => {
-            Ok(unsafe { std::str::from_utf8_unchecked(read_bytes(buf, offset, size)?) })
-        }
+
+    let data = match data_type {
+        DATA_TYPE_STRING => read_bytes(buf, offset, size)?,
         DATA_TYPE_POINTER => {
             let offset = &mut read_pointer(buf, offset, size)?;
             let (data_type, size) = read_control(buf, offset)?;
             match data_type {
-                DATA_TYPE_STRING => {
-                    Ok(unsafe { std::str::from_utf8_unchecked(read_bytes(buf, offset, size)?) })
-                }
-                _ => Err(Error::InvalidDataType(data_type)),
+                DATA_TYPE_STRING => read_bytes(buf, offset, size)?,
+                _ => return Err(Error::InvalidDataType(data_type)),
             }
         }
-        _ => Err(Error::InvalidDataType(data_type)),
-    }
+        _ => return Err(Error::InvalidDataType(data_type)),
+    };
+
+    #[cfg(feature = "unsafe-str")]
+    return Ok(unsafe { std::str::from_utf8_unchecked(data) });
+    #[cfg(not(feature = "unsafe-str"))]
+    std::str::from_utf8(data)
 }
 
 pub(crate) fn read_pointer(buf: &[u8], offset: &mut usize, size: usize) -> Result<usize, Error> {
