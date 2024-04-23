@@ -4,12 +4,6 @@ version = "0.1.0"
 edition = "2021"
 keywords = ["MaxMind", "GeoIP", "GeoIP2", "GeoLite", "ip"]
 
-[profile.bench]
-debug = true
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-
 [profile.release]
 opt-level = 3
 lto = "fat"
