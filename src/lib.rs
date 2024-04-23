@@ -10,3 +10,6 @@ pub use errors::Error;
 pub use reader::{
     AnonymousIp, Asn, City, ConnectionType, Country, Domain, Enterprise, Isp, Reader,
 };
+
+#[cfg(feature = "mmap")]
+pub use memmap2::Mmap;
