@@ -11,8 +11,8 @@ codegen-units = 1
 panic = "abort"
 
 [features]
-default = ["mmap", "unsafe-str"]
-mmap = ["memmap2"]
+default = []
+mmap = ["dep:memmap2"]
 unsafe-str = []
 
 [dependencies]
