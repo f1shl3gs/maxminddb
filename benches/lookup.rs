@@ -123,7 +123,6 @@ fn bench(c: &mut Criterion) {
         })
     });
 
-/*
     let reader = maxminddb::Reader::open_mmap(path).unwrap();
     group.bench_function("mmap", |b| {
         b.iter(|| {
@@ -142,7 +141,7 @@ fn bench(c: &mut Criterion) {
             }
         })
     });
-*/
+
     group.finish()
 }
 

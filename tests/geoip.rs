@@ -64,7 +64,7 @@ fn enterprise() {
         assert_eq!(traits.organization, Some("Fairpoint Communications"));
         assert_eq!(traits.connection_type, Some("Cable/DSL"));
         assert_eq!(traits.domain, Some("frpt.net"));
-        // assert_eq!(traits.static_ip_score, Some(0.34));
+        assert_eq!(traits.static_ip_score, Some(0.34));
         assert_eq!(traits.user_type, Some("residential"));
     }
     {
@@ -77,7 +77,7 @@ fn enterprise() {
         assert_eq!(traits.organization, Some("STONEHOUSE office network"));
         assert_eq!(traits.connection_type, Some("Corporate"));
         assert_eq!(traits.domain, Some("in-addr.arpa"));
-        // assert_eq!(traits.static_ip_score, Some(0.34));
+        assert_eq!(traits.static_ip_score, Some(0.34));
         assert_eq!(traits.user_type, Some("government"));
     }
 }

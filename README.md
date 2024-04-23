@@ -11,17 +11,17 @@ Mmap will use less memory than in-memory implementation.
 
 ## Bench
 ```text
-bench/in-memory         time:   [119.01 µs 120.92 µs 123.78 µs]
-Found 8 outliers among 100 measurements (8.00%)
+bench/in-memory         time:   [71.337 µs 71.562 µs 71.856 µs]
+Found 7 outliers among 100 measurements (7.00%)
   2 (2.00%) high mild
-  6 (6.00%) high severe
-bench/mmap              time:   [125.66 µs 129.31 µs 133.46 µs]
-Found 13 outliers among 100 measurements (13.00%)
-  2 (2.00%) high mild
-  11 (11.00%) high severe
-bench/geoip2            time:   [87.557 µs 88.734 µs 90.168 µs]
-Found 17 outliers among 100 measurements (17.00%)
-  6 (6.00%) high mild
-  11 (11.00%) high severe
+  5 (5.00%) high severe
+bench/mmap              time:   [72.232 µs 73.072 µs 73.882 µs]
+Found 5 outliers among 100 measurements (5.00%)
+  4 (4.00%) high mild
+  1 (1.00%) high severe
+bench/geoip2            time:   [88.798 µs 89.124 µs 89.487 µs]
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
 
 ```

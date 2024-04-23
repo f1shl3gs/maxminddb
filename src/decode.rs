@@ -27,6 +27,7 @@ pub trait Decoder<'a>: Sized {
                 let offset = &mut read_pointer(buf, offset, size)?;
                 let (data_type, size) = read_control(buf, offset)?;
                 match data_type {
+                    // NOTE: The `offset` here is not the argument anymore.
                     DATA_TYPE_MAP => Self::decode_with_size(buf, offset, size),
                     _ => Err(Error::InvalidDataType(data_type)),
                 }
@@ -38,6 +39,7 @@ pub trait Decoder<'a>: Sized {
     fn decode_with_size(buf: &'a [u8], offset: &mut usize, size: usize) -> Result<Self, Error>;
 }
 
+#[inline]
 pub(crate) fn read_control(buf: &[u8], offset: &mut usize) -> Result<(u8, usize), Error> {
     let control_byte = buf[*offset];
     *offset += 1;
@@ -117,17 +119,19 @@ pub(crate) fn read_bool(buf: &[u8], offset: &mut usize) -> Result<bool, Error> {
 pub(crate) fn read_f64(buf: &[u8], offset: &mut usize) -> Result<f64, Error> {
     let (data_type, size) = read_control(buf, offset)?;
 
+    #[inline]
+    fn bytes_to_f64(buf: &[u8]) -> f64 {
+        let reserved: [u8; 8] = buf.try_into().unwrap();
+        f64::from_be_bytes(reserved)
+    }
+
     match data_type {
-        DATA_TYPE_FLOAT64 => Ok(f64::from_bits(
-            bytes_to_usize(read_bytes(buf, offset, size)?) as u64,
-        )),
+        DATA_TYPE_FLOAT64 => Ok(bytes_to_f64(read_bytes(buf, offset, size)?)),
         DATA_TYPE_POINTER => {
             let offset = &mut read_pointer(buf, offset, size)?;
             let (data_type, size) = read_control(buf, offset)?;
             match data_type {
-                DATA_TYPE_FLOAT64 => Ok(f64::from_bits(bytes_to_usize(read_bytes(
-                    buf, offset, size,
-                )?) as u64)),
+                DATA_TYPE_FLOAT64 => Ok(bytes_to_f64(read_bytes(buf, offset, size)?)),
                 _ => Err(Error::InvalidDataType(data_type)),
             }
         }
@@ -139,7 +143,16 @@ pub(crate) fn read_usize(buf: &[u8], offset: &mut usize) -> Result<usize, Error>
     let (data_type, size) = read_control(buf, offset)?;
     match data_type {
         DATA_TYPE_UINT16 | DATA_TYPE_UINT32 | DATA_TYPE_INT32 | DATA_TYPE_UINT64
-        | DATA_TYPE_UINT128 => Ok(bytes_to_usize(read_bytes(buf, offset, size)?)),
+        | DATA_TYPE_UINT128 => {
+            if size == 0 {
+                return Ok(0);
+            }
+
+            let data = read_bytes(buf, offset, size)?;
+            let value = bytes_to_usize(data);
+            // println!("{data_type} {size} {value} {data:?}");
+            Ok(value)
+        }
         DATA_TYPE_POINTER => {
             let offset = &mut read_pointer(buf, offset, size)?;
             let (data_type, size) = read_control(buf, offset)?;
@@ -213,6 +226,7 @@ pub(crate) fn read_map<'a>(
     }
 }
 
+#[inline]
 fn read_bytes<'a>(buf: &'a [u8], offset: &mut usize, size: usize) -> Result<&'a [u8], Error> {
     let new_offset = *offset + size;
     if new_offset > buf.len() {
@@ -225,48 +239,13 @@ fn read_bytes<'a>(buf: &'a [u8], offset: &mut usize, size: usize) -> Result<&'a 
 
 fn bytes_to_usize(buf: &[u8]) -> usize {
     match buf.len() {
-        1 => buf[0] as usize,
-        2 => (buf[0] as usize) << 8 | (buf[1] as usize),
-        3 => ((buf[0] as usize) << 8 | (buf[1] as usize)) << 8 | (buf[2] as usize),
-        4 => {
-            (((buf[0] as usize) << 8 | (buf[1] as usize)) << 8 | (buf[2] as usize)) << 8
-                | (buf[3] as usize)
-        }
-        5 => {
-            ((((buf[0] as usize) << 8 | (buf[1] as usize)) << 8 | (buf[2] as usize)) << 8
-                | (buf[3] as usize))
-                << 8
-                | (buf[4] as usize)
-        }
-        6 => {
-            (((((buf[0] as usize) << 8 | (buf[1] as usize)) << 8 | (buf[2] as usize)) << 8
-                | (buf[3] as usize))
-                << 8
-                | (buf[4] as usize))
-                << 8
-                | (buf[5] as usize)
-        }
-        7 => {
-            ((((((buf[0] as usize) << 8 | (buf[1] as usize)) << 8 | (buf[2] as usize)) << 8
-                | (buf[3] as usize))
-                << 8
-                | (buf[4] as usize))
-                << 8
-                | (buf[5] as usize))
-                << 8
-                | (buf[6] as usize)
-        }
-        8 => {
-            (((((((buf[0] as usize) << 8 | (buf[1] as usize)) << 8 | (buf[2] as usize)) << 8
-                | (buf[3] as usize))
-                << 8
-                | (buf[4] as usize))
-                << 8
-                | (buf[5] as usize))
-                << 8
-                | (buf[6] as usize))
-                << 8
-                | (buf[7] as usize)
+        1..=8 => {
+            let mut value = 0usize;
+            for &b in buf {
+                value = value << 8 | b as usize
+            }
+
+            value
         }
         _ => 0,
     }
@@ -274,58 +253,13 @@ fn bytes_to_usize(buf: &[u8]) -> usize {
 
 fn bytes_to_usize_with_prefix(prefix: usize, buf: &[u8]) -> usize {
     match buf.len() {
-        0 => prefix,
-        1 => prefix << 8 | (buf[0] as usize),
-        2 => (prefix << 8 | (buf[0] as usize)) << 8 | (buf[1] as usize),
-        3 => ((prefix << 8 | (buf[0] as usize)) << 8 | (buf[1] as usize)) << 8 | (buf[2] as usize),
-        4 => {
-            (((prefix << 8 | (buf[0] as usize)) << 8 | (buf[1] as usize)) << 8 | (buf[2] as usize))
-                << 8
-                | (buf[3] as usize)
-        }
-        5 => {
-            ((((prefix << 8 | (buf[0] as usize)) << 8 | (buf[1] as usize)) << 8
-                | (buf[2] as usize))
-                << 8
-                | (buf[3] as usize))
-                << 8
-                | (buf[4] as usize)
-        }
-        6 => {
-            (((((prefix << 8 | (buf[0] as usize)) << 8 | (buf[1] as usize)) << 8
-                | (buf[2] as usize))
-                << 8
-                | (buf[3] as usize))
-                << 8
-                | (buf[4] as usize))
-                << 8
-                | (buf[5] as usize)
-        }
-        7 => {
-            ((((((prefix << 8 | (buf[0] as usize)) << 8 | (buf[1] as usize)) << 8
-                | (buf[2] as usize))
-                << 8
-                | (buf[3] as usize))
-                << 8
-                | (buf[4] as usize))
-                << 8
-                | (buf[5] as usize))
-                << 8
-                | (buf[6] as usize)
-        }
-        8 => {
-            (((((((prefix << 8 | (buf[0] as usize)) << 8 | (buf[1] as usize)) << 8
-                | (buf[2] as usize))
-                << 8
-                | (buf[3] as usize))
-                << 8
-                | (buf[4] as usize))
-                << 8
-                | (buf[5] as usize))
-                << 8
-                | (buf[6] as usize))
-                << 8
-                | (buf[7] as usize)
+        0..=8 => {
+            let mut value = prefix;
+            for &b in buf {
+                value = value << 8 | b as usize
+            }
+
+            value
         }
         _ => 0,
     }

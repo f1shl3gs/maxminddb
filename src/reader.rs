@@ -116,10 +116,14 @@ impl<'a, S: AsRef<[u8]>> Reader<S> {
             return Err(Error::CorruptSearchTree);
         }
 
-        T::decode(
-            &self.data.as_ref()[self.search_tree_size + DATA_SECTION_SEPARATOR_SIZE..],
-            &mut offset,
-        )
+        // `T` must be a MAP
+        let buf = &self.data.as_ref()[self.search_tree_size + DATA_SECTION_SEPARATOR_SIZE..];
+        let (data_type, size) = read_control(buf, &mut offset)?;
+        if data_type != DATA_TYPE_MAP {
+            return Err(Error::InvalidDataType(data_type));
+        }
+
+        T::decode_with_size(buf, &mut offset, size)
     }
 
     fn find_address_in_tree(&self, ip: &[u8]) -> Result<usize, Error> {
@@ -146,24 +150,26 @@ impl<'a, S: AsRef<[u8]>> Reader<S> {
             }
         }
 
-        match self.node_count {
-            n if n == node => Ok(0),
-            n if node > n => Ok(node),
-            _ => Err(Error::InvalidNode),
+        if self.node_count == node {
+            Ok(0)
+        } else if node > self.node_count {
+            Ok(node)
+        } else {
+            Err(Error::InvalidNode)
         }
     }
 
     #[inline]
     fn read_left(&self, buf: &[u8], nodes: usize) -> usize {
         match self.record_size {
-            24 => {
-                ((buf[nodes] as usize) << 16)
-                    | ((buf[nodes + 1] as usize) << 8)
-                    | (buf[nodes + 2] as usize)
-            }
             28 => {
                 (((buf[nodes + 3] as usize) & 0xF0) << 20)
                     | ((buf[nodes] as usize) << 16)
+                    | ((buf[nodes + 1] as usize) << 8)
+                    | (buf[nodes + 2] as usize)
+            }
+            24 => {
+                ((buf[nodes] as usize) << 16)
                     | ((buf[nodes + 1] as usize) << 8)
                     | (buf[nodes + 2] as usize)
             }
@@ -180,16 +186,16 @@ impl<'a, S: AsRef<[u8]>> Reader<S> {
     #[inline]
     fn read_right(&self, buf: &[u8], nodes: usize) -> usize {
         match self.record_size {
-            24 => {
-                ((buf[nodes + 3] as usize) << 16)
-                    | ((buf[nodes + 4] as usize) << 8)
-                    | (buf[nodes + 5] as usize)
-            }
             28 => {
                 (((buf[nodes + 3] as usize) & 0x0F) << 24)
                     | ((buf[nodes + 4] as usize) << 16)
                     | ((buf[nodes + 5] as usize) << 8)
                     | (buf[nodes + 6] as usize)
+            }
+            24 => {
+                ((buf[nodes + 3] as usize) << 16)
+                    | ((buf[nodes + 4] as usize) << 8)
+                    | (buf[nodes + 5] as usize)
             }
             32 => {
                 ((buf[nodes + 4] as usize) << 24)
@@ -214,15 +220,6 @@ pub struct AnonymousIp {
 }
 
 impl<'a> Decoder<'a> for AnonymousIp {
-    fn decode(buf: &'a [u8], offset: &mut usize) -> Result<Self, Error> {
-        let (data_type, size) = read_control(buf, offset)?;
-        if data_type != DATA_TYPE_MAP {
-            return Err(Error::InvalidDataType(data_type));
-        }
-
-        Self::decode_with_size(buf, offset, size)
-    }
-
     fn decode_with_size(buf: &'a [u8], offset: &mut usize, size: usize) -> Result<Self, Error> {
         let mut is_anonymous = None;
         let mut is_anonymous_vpn = None;
@@ -265,15 +262,6 @@ pub struct Country<'a> {
 }
 
 impl<'a> Decoder<'a> for Country<'a> {
-    fn decode(buf: &'a [u8], offset: &mut usize) -> Result<Self, Error> {
-        let (data_type, size) = read_control(buf, offset)?;
-        if data_type != DATA_TYPE_MAP {
-            return Err(Error::InvalidDataType(data_type));
-        }
-
-        Self::decode_with_size(buf, offset, size)
-    }
-
     fn decode_with_size(buf: &'a [u8], offset: &mut usize, size: usize) -> Result<Self, Error> {
         let mut continent = None;
         let mut country = None;
@@ -324,44 +312,27 @@ pub struct City<'a> {
 }
 
 impl<'a> Decoder<'a> for City<'a> {
-    fn decode(buf: &'a [u8], offset: &mut usize) -> Result<Self, Error> {
-        let (data_type, size) = read_control(buf, offset)?;
-        if data_type != DATA_TYPE_MAP {
-            return Err(Error::InvalidDataType(data_type));
-        }
-
-        Self::decode_with_size(buf, offset, size)
-    }
-
     #[inline]
     fn decode_with_size(buf: &'a [u8], offset: &mut usize, size: usize) -> Result<Self, Error> {
-        let mut city = None;
-        let mut continent = None;
-        let mut country = None;
-        let mut location = None;
-        let mut postal = None;
-        let mut registered_country = None;
-        let mut represented_country = None;
-        let mut subdivisions = None;
-        let mut traits = None;
+        let mut city = City::default();
 
         for _ in 0..size {
             match read_str(buf, offset)? {
-                "city" => city = Some(models::City::decode(buf, offset)?),
-                "continent" => continent = Some(models::Continent::decode(buf, offset)?),
-                "country" => country = Some(models::Country::decode(buf, offset)?),
-                "location" => location = Some(models::Location::decode(buf, offset)?),
-                "postal" => postal = Some(models::Postal::decode(buf, offset)?),
+                "city" => city.city = Some(models::City::decode(buf, offset)?),
+                "continent" => city.continent = Some(models::Continent::decode(buf, offset)?),
+                "country" => city.country = Some(models::Country::decode(buf, offset)?),
+                "location" => city.location = Some(models::Location::decode(buf, offset)?),
+                "postal" => city.postal = Some(models::Postal::decode(buf, offset)?),
                 "registered_country" => {
-                    registered_country = Some(models::Country::decode(buf, offset)?)
+                    city.registered_country = Some(models::Country::decode(buf, offset)?)
                 }
                 "represented_country" => {
-                    represented_country = Some(models::RepresentedCountry::decode(buf, offset)?)
+                    city.represented_country =
+                        Some(models::RepresentedCountry::decode(buf, offset)?)
                 }
                 "subdivisions" => {
                     let (data_type, size) = read_control(buf, offset)?;
-
-                    subdivisions = match data_type {
+                    city.subdivisions = match data_type {
                         DATA_TYPE_SLICE => {
                             let mut array = Vec::with_capacity(size);
                             for _ in 0..size {
@@ -390,76 +361,56 @@ impl<'a> Decoder<'a> for City<'a> {
                         _ => return Err(Error::InvalidDataType(data_type)),
                     };
                 }
-                "traits" => traits = Some(models::Traits::decode(buf, offset)?),
+                "traits" => city.traits = Some(models::Traits::decode(buf, offset)?),
                 field => return Err(Error::UnknownField(field.to_string())),
             }
         }
 
-        Ok(Self {
-            city,
-            continent,
-            country,
-            location,
-            postal,
-            registered_country,
-            represented_country,
-            subdivisions,
-            traits,
-        })
+        Ok(city)
     }
 }
 
 /// GeoIP2 Enterprise record
-#[derive(Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Enterprise<'a> {
-    pub city: Option<models::EnterpriseCity<'a>>,
     pub continent: Option<models::Continent<'a>>,
     pub country: Option<models::EnterpriseCountry<'a>>,
+    pub subdivisions: Option<Vec<models::EnterpriseSubdivision<'a>>>,
+    pub city: Option<models::EnterpriseCity<'a>>,
     pub location: Option<models::Location<'a>>,
     pub postal: Option<models::EnterprisePostal<'a>>,
     pub registered_country: Option<models::EnterpriseCountry<'a>>,
-    pub represented_country: Option<models::RepresentedCountry<'a>>,
-    pub subdivisions: Option<Vec<models::EnterpriseSubdivision<'a>>>,
+    pub represented_country: Option<models::EnterpriseRepresentedCountry<'a>>,
     pub traits: Option<models::EnterpriseTraits<'a>>,
 }
 
 impl<'a> Decoder<'a> for Enterprise<'a> {
-    fn decode(buf: &'a [u8], offset: &mut usize) -> Result<Self, Error> {
-        let (data_type, size) = read_control(buf, offset)?;
-        if data_type != DATA_TYPE_MAP {
-            return Err(Error::InvalidDataType(data_type));
-        }
-
-        Self::decode_with_size(buf, offset, size)
-    }
-
     fn decode_with_size(buf: &'a [u8], offset: &mut usize, size: usize) -> Result<Self, Error> {
-        let mut city = None;
-        let mut continent = None;
-        let mut country = None;
-        let mut location = None;
-        let mut postal = None;
-        let mut registered_country = None;
-        let mut represented_country = None;
-        let mut subdivisions = None;
-        let mut traits = None;
+        let mut enterprise = Enterprise::default();
 
         for _ in 0..size {
             match read_str(buf, offset)? {
-                "city" => city = Some(models::EnterpriseCity::decode(buf, offset)?),
-                "continent" => continent = Some(models::Continent::decode(buf, offset)?),
-                "country" => country = Some(models::EnterpriseCountry::decode(buf, offset)?),
-                "location" => location = Some(models::Location::decode(buf, offset)?),
-                "postal" => postal = Some(models::EnterprisePostal::decode(buf, offset)?),
+                "city" => enterprise.city = Some(models::EnterpriseCity::decode(buf, offset)?),
+                "continent" => enterprise.continent = Some(models::Continent::decode(buf, offset)?),
+                "country" => {
+                    enterprise.country = Some(models::EnterpriseCountry::decode(buf, offset)?)
+                }
+                "location" => enterprise.location = Some(models::Location::decode(buf, offset)?),
+                "postal" => {
+                    enterprise.postal = Some(models::EnterprisePostal::decode(buf, offset)?)
+                }
                 "registered_country" => {
-                    registered_country = Some(models::EnterpriseCountry::decode(buf, offset)?)
+                    enterprise.registered_country =
+                        Some(models::EnterpriseCountry::decode(buf, offset)?)
                 }
                 "represented_country" => {
-                    represented_country = Some(models::RepresentedCountry::decode(buf, offset)?)
+                    enterprise.represented_country =
+                        Some(models::EnterpriseRepresentedCountry::decode(buf, offset)?)
                 }
                 "subdivisions" => {
                     let (data_type, size) = read_control(buf, offset)?;
-                    let array = match data_type {
+
+                    enterprise.subdivisions = Some(match data_type {
                         DATA_TYPE_SLICE => {
                             let mut array = Vec::with_capacity(size);
 
@@ -488,91 +439,63 @@ impl<'a> Decoder<'a> for Enterprise<'a> {
                             }
                         }
                         _ => return Err(Error::InvalidDataType(data_type)),
-                    };
-
-                    subdivisions = Some(array);
+                    });
                 }
-                "traits" => traits = Some(models::EnterpriseTraits::decode(buf, offset)?),
+                "traits" => {
+                    enterprise.traits = Some(models::EnterpriseTraits::decode(buf, offset)?)
+                }
                 field => return Err(Error::UnknownField(field.to_string())),
             }
         }
 
-        Ok(Self {
-            city,
-            continent,
-            country,
-            location,
-            postal,
-            registered_country,
-            represented_country,
-            subdivisions,
-            traits,
-        })
+        Ok(enterprise)
     }
 }
 
 /// GeoIP2 Connection-Type record
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ConnectionType<'a> {
     pub connection_type: Option<&'a str>,
 }
 
 impl<'a> Decoder<'a> for ConnectionType<'a> {
-    fn decode(buf: &'a [u8], offset: &mut usize) -> Result<Self, Error> {
-        let (data_type, size) = read_control(buf, offset)?;
-        if data_type != DATA_TYPE_MAP {
-            return Err(Error::InvalidDataType(data_type));
-        }
-
-        Self::decode_with_size(buf, offset, size)
-    }
-
     fn decode_with_size(buf: &'a [u8], offset: &mut usize, size: usize) -> Result<Self, Error> {
-        let mut connection_type = None;
+        let mut connection_type = ConnectionType::default();
 
         for _ in 0..size {
             match read_str(buf, offset)? {
-                "connection_type" => connection_type = Some(read_str(buf, offset)?),
+                "connection_type" => connection_type.connection_type = Some(read_str(buf, offset)?),
                 field => return Err(Error::UnknownField(field.to_string())),
             }
         }
 
-        Ok(Self { connection_type })
+        Ok(connection_type)
     }
 }
 
 /// GeoIP2 Domain record
-#[derive(Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Domain<'a> {
     pub domain: Option<&'a str>,
 }
 
 impl<'a> Decoder<'a> for Domain<'a> {
-    fn decode(buf: &'a [u8], offset: &mut usize) -> Result<Self, Error> {
-        let (data_type, size) = read_control(buf, offset)?;
-        if data_type != DATA_TYPE_MAP {
-            return Err(Error::InvalidDataType(data_type));
-        }
-
-        Self::decode_with_size(buf, offset, size)
-    }
-
     fn decode_with_size(buf: &'a [u8], offset: &mut usize, size: usize) -> Result<Self, Error> {
-        let mut domain = None;
+        let mut domain = Domain::default();
 
         for _ in 0..size {
             match read_str(buf, offset)? {
-                "domain" => domain = Some(read_str(buf, offset)?),
+                "domain" => domain.domain = Some(read_str(buf, offset)?),
                 field => return Err(Error::UnknownField(field.to_string())),
             }
         }
 
-        Ok(Self { domain })
+        Ok(domain)
     }
 }
 
 /// GeoIP2 ISP record
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Isp<'a> {
     pub autonomous_system_number: Option<u32>,
     pub autonomous_system_organization: Option<&'a str>,
@@ -583,87 +506,53 @@ pub struct Isp<'a> {
 }
 
 impl<'a> Decoder<'a> for Isp<'a> {
-    fn decode(buf: &'a [u8], offset: &mut usize) -> Result<Self, Error> {
-        let (data_type, size) = read_control(buf, offset)?;
-        if data_type != DATA_TYPE_MAP {
-            return Err(Error::InvalidDataType(data_type));
-        }
-
-        Self::decode_with_size(buf, offset, size)
-    }
-
     fn decode_with_size(buf: &'a [u8], offset: &mut usize, size: usize) -> Result<Self, Error> {
-        let mut autonomous_system_number = None;
-        let mut autonomous_system_organization = None;
-        let mut isp = None;
-        let mut mobile_country_code = None;
-        let mut mobile_network_code = None;
-        let mut organization = None;
+        let mut isp = Isp::default();
 
         for _ in 0..size {
             match read_str(buf, offset)? {
                 "autonomous_system_number" => {
-                    autonomous_system_number = Some(read_usize(buf, offset)? as u32)
+                    isp.autonomous_system_number = Some(read_usize(buf, offset)? as u32)
                 }
                 "autonomous_system_organization" => {
-                    autonomous_system_organization = Some(read_str(buf, offset)?)
+                    isp.autonomous_system_organization = Some(read_str(buf, offset)?)
                 }
-                "isp" => isp = Some(read_str(buf, offset)?),
-                "mobile_country_code" => mobile_country_code = Some(read_str(buf, offset)?),
-                "mobile_network_code" => mobile_network_code = Some(read_str(buf, offset)?),
-                "organization" => organization = Some(read_str(buf, offset)?),
+                "isp" => isp.isp = Some(read_str(buf, offset)?),
+                "mobile_country_code" => isp.mobile_country_code = Some(read_str(buf, offset)?),
+                "mobile_network_code" => isp.mobile_network_code = Some(read_str(buf, offset)?),
+                "organization" => isp.organization = Some(read_str(buf, offset)?),
                 field => return Err(Error::UnknownField(field.to_string())),
             }
         }
 
-        Ok(Self {
-            autonomous_system_number,
-            autonomous_system_organization,
-            isp,
-            mobile_country_code,
-            mobile_network_code,
-            organization,
-        })
+        Ok(isp)
     }
 }
 
 /// GeoIP2 Asn record
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Asn<'a> {
     pub autonomous_system_number: Option<u32>,
     pub autonomous_system_organization: Option<&'a str>,
 }
 
 impl<'a> Decoder<'a> for Asn<'a> {
-    fn decode(buf: &'a [u8], offset: &mut usize) -> Result<Self, Error> {
-        let (data_type, size) = read_control(buf, offset)?;
-        if data_type != DATA_TYPE_MAP {
-            return Err(Error::InvalidDataType(data_type));
-        }
-
-        Self::decode_with_size(buf, offset, size)
-    }
-
     fn decode_with_size(buf: &'a [u8], offset: &mut usize, size: usize) -> Result<Self, Error> {
-        let mut autonomous_system_number = None;
-        let mut autonomous_system_organization = None;
+        let mut asn = Asn::default();
 
         for _ in 0..size {
             match read_str(buf, offset)? {
                 "autonomous_system_number" => {
-                    autonomous_system_number = Some(read_usize(buf, offset)? as u32)
+                    asn.autonomous_system_number = Some(read_usize(buf, offset)? as u32)
                 }
                 "autonomous_system_organization" => {
-                    autonomous_system_organization = Some(read_str(buf, offset)?)
+                    asn.autonomous_system_organization = Some(read_str(buf, offset)?)
                 }
                 field => return Err(Error::UnknownField(field.to_string())),
             }
         }
 
-        Ok(Self {
-            autonomous_system_number,
-            autonomous_system_organization,
-        })
+        Ok(asn)
     }
 }
 

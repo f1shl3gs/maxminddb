@@ -27,7 +27,6 @@ memmap2 = { version = "0.9", default-features = false, optional = true }
 [dev-dependencies]
 criterion = "0.5"
 geoip2 = { version = "0.1", features = ["unsafe-str"] }
-pprof = { version = "0.3", features = ["flamegraph"] }
 
 [[bench]]
 name = "lookup"
