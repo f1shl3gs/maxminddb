@@ -23,7 +23,7 @@ impl<'a> Decoder<'a> for City<'a> {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct Continent<'a> {
     pub geoname_id: Option<u32>,
     pub code: Option<&'a str>,
@@ -75,7 +75,7 @@ impl<'a> Decoder<'a> for Country<'a> {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct RepresentedCountry<'a> {
     pub geoname_id: Option<u32>,
     pub is_in_european_union: Option<bool>,
@@ -208,7 +208,7 @@ impl<'a> Decoder<'a> for Subdivision<'a> {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct EnterpriseCountry<'a> {
     pub geoname_id: Option<u32>,
     pub iso_code: Option<&'a str>,
@@ -242,7 +242,7 @@ impl<'a> Decoder<'a> for EnterpriseCountry<'a> {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct EnterpriseRepresentedCountry<'a> {
     pub confidence: Option<u16>,
     pub geoname_id: Option<u32>,
@@ -274,7 +274,7 @@ impl<'a> Decoder<'a> for EnterpriseRepresentedCountry<'a> {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct EnterpriseCity<'a> {
     pub confidence: Option<u16>,
     pub geoname_id: Option<u32>,
@@ -320,7 +320,7 @@ impl<'a> Decoder<'a> for EnterprisePostal<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct EnterpriseSubdivision<'a> {
     pub confidence: Option<u16>,
     pub geoname_id: Option<u32>,

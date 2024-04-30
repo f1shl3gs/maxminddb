@@ -43,6 +43,11 @@ impl<'a> Metadata<'a> {
             }
         }
 
+        // validate
+        if metadata.record_size != 24 && metadata.record_size != 28 && metadata.record_size != 32 {
+            return Err(Error::InvalidRecordSize(metadata.record_size));
+        }
+
         Ok(metadata)
     }
 }
@@ -74,7 +79,6 @@ mod tests {
 
         let offset = find_metadata_start(&data).unwrap();
         let metadata = Metadata::from_bytes(&data[offset..]).unwrap();
-        println!("{:#?}", metadata);
 
         assert_eq!(metadata.binary_format_major_version, 2);
         assert_eq!(metadata.binary_format_minor_version, 0);

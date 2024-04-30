@@ -39,7 +39,7 @@ pub trait Decoder<'a>: Sized {
     fn decode_with_size(buf: &'a [u8], offset: &mut usize, size: usize) -> Result<Self, Error>;
 }
 
-#[inline]
+#[inline(always)]
 pub(crate) fn read_control(buf: &[u8], offset: &mut usize) -> Result<(u8, usize), Error> {
     let control_byte = buf[*offset];
     *offset += 1;
@@ -52,19 +52,40 @@ pub(crate) fn read_control(buf: &[u8], offset: &mut usize) -> Result<(u8, usize)
     if data_type == DATA_TYPE_EXTENDED || size < 29 {
         return Ok((data_type, size));
     }
-    let bytes_to_read = size - 28;
-    size = bytes_to_usize(read_bytes(buf, offset, bytes_to_read)?);
-    size += match bytes_to_read {
-        1 => 29,
-        2 => 285,
-        _ => 65_821,
-    };
+
+    match size - 28 {
+        1 => {
+            if *offset > buf.len() - 1 {
+                return Err(Error::InvalidOffset);
+            }
+
+            size = 29 + buf[*offset] as usize;
+            *offset += 1;
+        }
+        2 => {
+            if *offset > buf.len() - 2 {
+                return Err(Error::InvalidOffset);
+            }
+
+            size = 285 + buf[*offset] as usize * 256 + buf[*offset + 1] as usize;
+            *offset += 2;
+        }
+        n => {
+            if *offset > buf.len() - n {
+                return Err(Error::InvalidOffset);
+            }
+
+            size = 65_821;
+            *offset += n;
+        }
+    }
+
     Ok((data_type, size))
 }
 
+#[inline]
 pub(crate) fn read_str<'a>(buf: &'a [u8], offset: &mut usize) -> Result<&'a str, Error> {
     let (data_type, size) = read_control(buf, offset)?;
-
     let data = match data_type {
         DATA_TYPE_STRING => read_bytes(buf, offset, size)?,
         DATA_TYPE_POINTER => {
@@ -81,16 +102,27 @@ pub(crate) fn read_str<'a>(buf: &'a [u8], offset: &mut usize) -> Result<&'a str,
     #[cfg(feature = "unsafe-str")]
     return Ok(unsafe { std::str::from_utf8_unchecked(data) });
     #[cfg(not(feature = "unsafe-str"))]
-    std::str::from_utf8(data)
+    std::str::from_utf8(data).map_err(Error::InvalidUtf8)
 }
 
+#[inline]
 pub(crate) fn read_pointer(buf: &[u8], offset: &mut usize, size: usize) -> Result<usize, Error> {
     let pointer_size = ((size >> 3) & 0x3) + 1;
     let mut prefix = 0usize;
     if pointer_size != 4 {
         prefix = size & 0x7
     }
-    let unpacked = bytes_to_usize_with_prefix(prefix, read_bytes(buf, offset, pointer_size)?);
+
+    let unpacked = {
+        let mut value = prefix;
+        for pos in *offset..*offset + pointer_size {
+            value = value << 8 | buf[pos] as usize;
+        }
+
+        *offset += pointer_size;
+        value
+    };
+
     let pointer_value_offset = match pointer_size {
         2 => 2048,
         3 => 526_336,
@@ -119,7 +151,7 @@ pub(crate) fn read_bool(buf: &[u8], offset: &mut usize) -> Result<bool, Error> {
 pub(crate) fn read_f64(buf: &[u8], offset: &mut usize) -> Result<f64, Error> {
     let (data_type, size) = read_control(buf, offset)?;
 
-    #[inline]
+    #[inline(always)]
     fn bytes_to_f64(buf: &[u8]) -> f64 {
         let reserved: [u8; 8] = buf.try_into().unwrap();
         f64::from_be_bytes(reserved)
@@ -141,29 +173,39 @@ pub(crate) fn read_f64(buf: &[u8], offset: &mut usize) -> Result<f64, Error> {
 
 pub(crate) fn read_usize(buf: &[u8], offset: &mut usize) -> Result<usize, Error> {
     let (data_type, size) = read_control(buf, offset)?;
-    match data_type {
+    let size = match data_type {
         DATA_TYPE_UINT16 | DATA_TYPE_UINT32 | DATA_TYPE_INT32 | DATA_TYPE_UINT64
-        | DATA_TYPE_UINT128 => {
-            if size == 0 {
-                return Ok(0);
-            }
-
-            let data = read_bytes(buf, offset, size)?;
-            let value = bytes_to_usize(data);
-            // println!("{data_type} {size} {value} {data:?}");
-            Ok(value)
-        }
+        | DATA_TYPE_UINT128 => size,
         DATA_TYPE_POINTER => {
             let offset = &mut read_pointer(buf, offset, size)?;
             let (data_type, size) = read_control(buf, offset)?;
             match data_type {
                 DATA_TYPE_UINT16 | DATA_TYPE_UINT32 | DATA_TYPE_INT32 | DATA_TYPE_UINT64
-                | DATA_TYPE_UINT128 => Ok(bytes_to_usize(read_bytes(buf, offset, size)?)),
-                _ => Err(Error::InvalidDataType(data_type)),
+                | DATA_TYPE_UINT128 => size,
+                _ => return Err(Error::InvalidDataType(data_type)),
             }
         }
-        _ => Err(Error::InvalidDataType(data_type)),
+        _ => return Err(Error::InvalidDataType(data_type)),
+    };
+
+    if size == 0 {
+        return Ok(0);
     }
+
+    if *offset + size > buf.len() {
+        return Err(Error::InvalidOffset);
+    }
+
+    let mut value = 0;
+    for pos in *offset..*offset + size {
+        let ch = buf[pos] as usize;
+
+        value = value << 8 | ch;
+    }
+
+    *offset += size;
+
+    Ok(value)
 }
 
 pub(crate) fn read_str_array<'a>(buf: &'a [u8], offset: &mut usize) -> Result<Vec<&'a str>, Error> {
@@ -237,21 +279,18 @@ fn read_bytes<'a>(buf: &'a [u8], offset: &mut usize, size: usize) -> Result<&'a 
     Ok(bytes)
 }
 
-fn bytes_to_usize(buf: &[u8]) -> usize {
-    match buf.len() {
-        1..=8 => {
-            let mut value = 0usize;
-            for &b in buf {
-                value = value << 8 | b as usize
-            }
-
-            value
-        }
-        _ => 0,
+#[inline]
+pub(crate) fn bytes_to_usize(buf: &[u8]) -> usize {
+    let mut value = 0usize;
+    for &b in buf {
+        value = value << 8 | b as usize
     }
+
+    value
 }
 
-fn bytes_to_usize_with_prefix(prefix: usize, buf: &[u8]) -> usize {
+#[inline]
+pub(crate) fn bytes_to_usize_with_prefix(prefix: usize, buf: &[u8]) -> usize {
     match buf.len() {
         0..=8 => {
             let mut value = prefix;

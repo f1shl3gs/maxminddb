@@ -2,8 +2,8 @@ use std::net::IpAddr;
 use std::path::Path;
 
 use crate::decode::{
-    read_bool, read_control, read_pointer, read_str, read_usize, Decoder, DATA_TYPE_MAP,
-    DATA_TYPE_POINTER, DATA_TYPE_SLICE,
+    bytes_to_usize, bytes_to_usize_with_prefix, read_bool, read_control, read_pointer, read_str,
+    read_usize, Decoder, DATA_TYPE_MAP, DATA_TYPE_POINTER, DATA_TYPE_SLICE,
 };
 use crate::metadata::{find_metadata_start, Metadata};
 use crate::{models, Error};
@@ -20,7 +20,6 @@ pub struct Reader<S: AsRef<[u8]>> {
     node_count: usize,
     node_offset_multi: usize,
     ip_v4_start: usize,
-    ip_v4_start_bit_depth: usize,
 }
 
 impl Reader<Vec<u8>> {
@@ -34,7 +33,7 @@ impl Reader<Vec<u8>> {
 #[cfg(feature = "mmap")]
 impl Reader<memmap2::Mmap> {
     /// Open a MaxMind DB file by mmaping it.
-    pub fn open_mmap(path: impl AsRef<Path>) -> Result<Reader<memmap2::Mmap>, Error> {
+    pub fn mmap(path: impl AsRef<Path>) -> Result<Reader<memmap2::Mmap>, Error> {
         let file = std::fs::File::open(path)?;
         let mmap = unsafe { memmap2::MmapOptions::new().map(&file) }?;
         Reader::from_bytes(mmap)
@@ -46,11 +45,6 @@ impl<'a, S: AsRef<[u8]>> Reader<S> {
     pub fn from_bytes(buf: S) -> Result<Self, Error> {
         let metadata_start = find_metadata_start(buf.as_ref())?;
         let metadata = Metadata::from_bytes(&buf.as_ref()[metadata_start..])?;
-
-        // validate metadata
-        if metadata.record_size != 24 && metadata.record_size != 28 && metadata.record_size != 32 {
-            return Err(Error::InvalidRecordSize(metadata.record_size));
-        }
 
         let record_size = metadata.record_size;
         let node_count = metadata.node_count;
@@ -69,26 +63,28 @@ impl<'a, S: AsRef<[u8]>> Reader<S> {
             node_count,
             node_offset_multi,
             ip_v4_start: 0,
-            ip_v4_start_bit_depth: 0,
         };
 
         if ip_version == 6 {
+            // We are looking up an IPv4 address in an IPv6 tree.
+            // Skip over the first 96 nodes.
             let mut node = 0usize;
-            let mut i = 0usize;
-            while i < 96 && node < node_count {
-                i += 1;
-                let buf = &reader.data.as_ref()[..search_tree_size];
-                node = reader.read_left(buf, node * node_offset_multi);
+            for _ in 0..96 {
+                if node >= node_count {
+                    break;
+                }
+
+                node = reader.read_node(node, 0);
             }
 
             reader.ip_v4_start = node;
-            reader.ip_v4_start_bit_depth = i;
         }
 
         Ok(reader)
     }
 
-    // metadata() is a code path definitely, so it's ok to decode when
+    // metadata() is a cold path definitely, so it's ok to decode when
+    // we call it.
     pub fn metadata(&'a self) -> Result<Metadata<'a>, Error> {
         let buf = self.data.as_ref();
         let offset = find_metadata_start(buf)?;
@@ -112,12 +108,13 @@ impl<'a, S: AsRef<[u8]>> Reader<S> {
         }
 
         let mut offset = pointer - self.node_count - DATA_SECTION_SEPARATOR_SIZE;
-        if offset >= self.data.as_ref().len() {
+        let buf = self.data.as_ref();
+        if offset >= buf.len() {
             return Err(Error::CorruptSearchTree);
         }
 
         // `T` must be a MAP
-        let buf = &self.data.as_ref()[self.search_tree_size + DATA_SECTION_SEPARATOR_SIZE..];
+        let buf = &buf[self.search_tree_size + DATA_SECTION_SEPARATOR_SIZE..];
         let (data_type, size) = read_control(buf, &mut offset)?;
         if data_type != DATA_TYPE_MAP {
             return Err(Error::InvalidDataType(data_type));
@@ -135,19 +132,13 @@ impl<'a, S: AsRef<[u8]>> Reader<S> {
         };
 
         // node buf
-        let buf = &self.data.as_ref()[..self.search_tree_size];
         for i in 0..bit_count {
             if node >= self.node_count {
                 break;
             }
 
             let bit = 1 & (ip[i >> 3] >> (7 - (i % 8)));
-            let offset = node * self.node_offset_multi;
-            node = if bit == 0 {
-                self.read_left(buf, offset)
-            } else {
-                self.read_right(buf, offset)
-            }
+            node = self.read_node(node, bit as usize);
         }
 
         if self.node_count == node {
@@ -160,49 +151,31 @@ impl<'a, S: AsRef<[u8]>> Reader<S> {
     }
 
     #[inline]
-    fn read_left(&self, buf: &[u8], nodes: usize) -> usize {
-        match self.record_size {
-            28 => {
-                (((buf[nodes + 3] as usize) & 0xF0) << 20)
-                    | ((buf[nodes] as usize) << 16)
-                    | ((buf[nodes + 1] as usize) << 8)
-                    | (buf[nodes + 2] as usize)
-            }
-            24 => {
-                ((buf[nodes] as usize) << 16)
-                    | ((buf[nodes + 1] as usize) << 8)
-                    | (buf[nodes + 2] as usize)
-            }
-            32 => {
-                ((buf[nodes] as usize) << 24)
-                    | ((buf[nodes + 1] as usize) << 16)
-                    | ((buf[nodes + 2] as usize) << 8)
-                    | (buf[nodes + 3] as usize)
-            }
-            _ => panic!(),
-        }
-    }
+    fn read_node(&self, node: usize, index: usize) -> usize {
+        let buf = self.data.as_ref();
+        let base = node * self.node_offset_multi;
 
-    #[inline]
-    fn read_right(&self, buf: &[u8], nodes: usize) -> usize {
         match self.record_size {
             28 => {
-                (((buf[nodes + 3] as usize) & 0x0F) << 24)
-                    | ((buf[nodes + 4] as usize) << 16)
-                    | ((buf[nodes + 5] as usize) << 8)
-                    | (buf[nodes + 6] as usize)
+                let mut middle = buf[base + 3];
+                if index != 0 {
+                    middle &= 0x0F
+                } else {
+                    middle = (0xF0 & middle) >> 4
+                }
+
+                let offset = base + index * 4;
+                bytes_to_usize_with_prefix(middle as usize, &buf[offset..offset + 3])
             }
             24 => {
-                ((buf[nodes + 3] as usize) << 16)
-                    | ((buf[nodes + 4] as usize) << 8)
-                    | (buf[nodes + 5] as usize)
+                let offset = base + index * 3;
+                bytes_to_usize(&buf[offset..offset + 3])
             }
             32 => {
-                ((buf[nodes + 4] as usize) << 24)
-                    | ((buf[nodes + 5] as usize) << 16)
-                    | ((buf[nodes + 6] as usize) << 8)
-                    | (buf[nodes + 7] as usize)
+                let offset = base + index * 4;
+                bytes_to_usize(&buf[offset..offset + 4])
             }
+            // record_size is validated at the very beginning
             _ => panic!(),
         }
     }
@@ -371,7 +344,7 @@ impl<'a> Decoder<'a> for City<'a> {
 }
 
 /// GeoIP2 Enterprise record
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct Enterprise<'a> {
     pub continent: Option<models::Continent<'a>>,
     pub country: Option<models::EnterpriseCountry<'a>>,
@@ -553,21 +526,5 @@ impl<'a> Decoder<'a> for Asn<'a> {
         }
 
         Ok(asn)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use std::str::FromStr;
-
-    #[test]
-    fn lookup() {
-        let data = std::fs::read("testdata/GeoIP2-City-Test.mmdb").unwrap();
-        let reader = Reader::from_bytes(data).unwrap();
-        let ip = IpAddr::from_str("81.2.69.142").unwrap();
-        let city = reader.lookup::<City>(ip).unwrap();
-        println!("{:#?}", city);
     }
 }

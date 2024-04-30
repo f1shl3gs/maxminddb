@@ -123,7 +123,7 @@ fn bench(c: &mut Criterion) {
         })
     });
 
-    let reader = maxminddb::Reader::open_mmap(path).unwrap();
+    let reader = maxminddb::Reader::mmap(path).unwrap();
     group.bench_function("mmap", |b| {
         b.iter(|| {
             for ip in ips.iter() {
